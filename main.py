@@ -4,8 +4,8 @@ from typing import List, Optional
 from fastapi.responses import FileResponse
 from langchain.chains import LLMChain, RetrievalQA
 from langchain.prompts import PromptTemplate
-from langchain.document_loaders import PyPDFLoader
-from langchain.vectorstores import Chroma
+from langchain_community.document_loaders import PyPDFLoader  # use community loader
+from langchain_community.vectorstores import Chroma            # use community vectorstore
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.memory import ConversationBufferWindowMemory
 from fpdf import FPDF
@@ -15,25 +15,36 @@ from langchain_groq import ChatGroq
 from dotenv import load_dotenv
 import os
 
-# Load environment variables
 load_dotenv()
 
-# Initialize FastAPI app
 app = FastAPI(title="🌍 YatraBot API", description="AI-powered travel planning API", version="1.0")
 
 # ==== Text-to-Speech (Optional) ====
+engine = None
 try:
     import pyttsx3
-    engine = pyttsx3.init()
+    try:
+        engine = pyttsx3.init()  # might throw
+        # Attempt to validate voice setting, catch errors:
+        voices = engine.getProperty("voices")
+        if voices:
+            try:
+                engine.setProperty("voice", voices[0].id)
+            except Exception as e:
+                print("Warning: failed to set default TTS voice:", e)
+    except Exception as e:
+        print("Warning: pyttsx3 init failed:", e)
+        engine = None
+except ImportError:
+    print("pyttsx3 not installed. TTS unavailable.")
 
-    def speak_text(text: str):
+def speak_text(text: str):
+    if engine:
         try:
             engine.say(text)
             engine.runAndWait()
         except Exception as e:
-            print(f"TTS Error: {e}")
-except ImportError:
-    print("pyttsx3 not installed. Text-to-speech functionality will be unavailable.")
+            print("TTS Error during speak:", e)
 
 # ==== Data Models ====
 class UserProfile(BaseModel):
@@ -46,12 +57,10 @@ class UserProfile(BaseModel):
 class ChatRequest(BaseModel):
     message: str
 
-# ==== Load data once ====
+# ==== Load data (PDF → vector store) ====
 def load_data():
-    # Load from local PDF
     loader = PyPDFLoader("India Travel Guide.pdf")
     raw_docs = loader.load()
-
     splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=20)
     docs = splitter.split_documents(raw_docs)
 
@@ -72,15 +81,12 @@ def load_data():
     )
 
     qa_chain = RetrievalQA.from_chain_type(llm=llm, retriever=retriever)
-
     qa_nlp = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
 
     return qa_chain, qa_nlp, retriever, llm
 
-# Global LangChain objects
 qa_chain, qa_nlp, retriever, llm = load_data()
 
-# ==== Prompt Templates ====
 filter_prompt = PromptTemplate.from_template("""
 Act as a professional tour planner. Based on the user's profile, plan the top 5 travel destinations in India or abroad. 
 Include: destination name, highlights, best season, estimated budget, activities, nearby attractions, accommodation options,
@@ -113,12 +119,10 @@ DESTINATION DATA:
 {filtered_places}
 """)
 
-# Chains
 memory = ConversationBufferWindowMemory(k=5)
 filter_chain = LLMChain(prompt=filter_prompt, llm=llm)
 response_chain = LLMChain(prompt=human_prompt, llm=llm)
 
-# ==== PDF Generation ====
 def save_pdf_report(title: str, summary: str, filename="tour_plan.pdf"):
     pdf = FPDF()
     pdf.add_page()
@@ -127,7 +131,6 @@ def save_pdf_report(title: str, summary: str, filename="tour_plan.pdf"):
     pdf.output(filename)
     return filename
 
-# ==== Core Logic ====
 def generate_tour_plan(user_profile: dict) -> tuple[str, Optional[str]]:
     try:
         query = f"Best destinations for budget {user_profile['budget']} with interests {user_profile['interests']}"
@@ -159,7 +162,6 @@ def generate_tour_plan(user_profile: dict) -> tuple[str, Optional[str]]:
     except Exception as e:
         return f"⚠️ Error generating plan: {e}", None
 
-# ==== FastAPI Endpoints ====
 @app.post("/generate-tour")
 def create_tour(user_profile: UserProfile):
     response, pdf_file = generate_tour_plan(user_profile.dict())
@@ -185,6 +187,7 @@ def root():
 def chat_with_bot(req: ChatRequest):
     try:
         answer = qa_chain.run(req.message)
+        # Optionally, speak_text(answer)  # if you want verbal output
         return {"response": answer}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
