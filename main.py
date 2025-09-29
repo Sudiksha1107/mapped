@@ -3,9 +3,9 @@ from pydantic import BaseModel
 from typing import List, Optional
 from fastapi.responses import FileResponse
 from langchain.chains import LLMChain, RetrievalQA
-from langchain_core.prompts import PromptTemplate
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_community.vectorstores import Chroma
+from langchain.prompts import PromptTemplate
+from langchain.document_loaders import PyPDFLoader
+from langchain.vectorstores import Chroma
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.memory import ConversationBufferWindowMemory
 from fpdf import FPDF
@@ -15,21 +15,24 @@ from langchain_groq import ChatGroq
 from dotenv import load_dotenv
 import os
 
-# Load API keys
+# Load environment variables
 load_dotenv()
 
 # Initialize FastAPI app
 app = FastAPI(title="🌍 YatraBot API", description="AI-powered travel planning API", version="1.0")
 
 # ==== Text-to-Speech (Optional) ====
-import pyttsx3
-engine = pyttsx3.init()
-def speak_text(text: str):
-    try:
-        engine.say(text)
-        engine.runAndWait()
-    except Exception as e:
-        print(f"TTS Error: {e}")
+try:
+    import pyttsx3
+    engine = pyttsx3.init()
+    def speak_text(text: str):
+        try:
+            engine.say(text)
+            engine.runAndWait()
+        except Exception as e:
+            print(f"TTS Error: {e}")
+except ImportError:
+    print("pyttsx3 not installed. Text-to-speech functionality will be unavailable.")
 
 # ==== Data Models ====
 class UserProfile(BaseModel):
