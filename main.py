@@ -4,8 +4,8 @@ from typing import List, Optional
 from fastapi.responses import FileResponse
 from langchain.chains import LLMChain, RetrievalQA
 from langchain.prompts import PromptTemplate
-from langchain_community.document_loaders import PyPDFLoader  # use community loader
-from langchain_community.vectorstores import Chroma            # use community vectorstore
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_community.vectorstores import Chroma
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.memory import ConversationBufferWindowMemory
 from fpdf import FPDF
@@ -14,18 +14,19 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_groq import ChatGroq
 from dotenv import load_dotenv
 import os
+import pypdf  # for catching PDF errors
 
 load_dotenv()
 
-app = FastAPI(title="🌍 YatraBot API", description="AI-powered travel planning API", version="1.0")
+app = FastAPI(title="🌍 YatraBot API", version="1.0")
 
-# ==== Text-to-Speech (Optional) ====
+# ==== Text-to-Speech (Optional) with safe init ====
 engine = None
 try:
     import pyttsx3
     try:
-        engine = pyttsx3.init()  # might throw
-        # Attempt to validate voice setting, catch errors:
+        engine = pyttsx3.init()
+        # Try to set a default voice if available
         voices = engine.getProperty("voices")
         if voices:
             try:
@@ -46,7 +47,7 @@ def speak_text(text: str):
         except Exception as e:
             print("TTS Error during speak:", e)
 
-# ==== Data Models ====
+# ==== Models / Data classes ====
 class UserProfile(BaseModel):
     budget: str
     interests: List[str]
@@ -57,10 +58,18 @@ class UserProfile(BaseModel):
 class ChatRequest(BaseModel):
     message: str
 
-# ==== Load data (PDF → vector store) ====
+# ==== Load PDF + build vectorstore ====
 def load_data():
-    loader = PyPDFLoader("India Travel Guide.pdf")
-    raw_docs = loader.load()
+    # Load PDF safely
+    try:
+        loader = PyPDFLoader("India Travel Guide.pdf")
+        raw_docs = loader.load()
+    except pypdf.errors.PdfStreamError as fe:
+        # handle PDF read error
+        raise RuntimeError(f"Failed to load PDF: {fe}")
+    except Exception as e:
+        raise RuntimeError(f"Unexpected error loading PDF: {e}")
+
     splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=20)
     docs = splitter.split_documents(raw_docs)
 
@@ -71,7 +80,6 @@ def load_data():
         embedding=embedding,
         persist_directory="./tour_chroma_db"
     )
-
     retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 5})
 
     llm = ChatGroq(
@@ -85,38 +93,16 @@ def load_data():
 
     return qa_chain, qa_nlp, retriever, llm
 
+# Instantiate once (will error early if PDF or LLM setup fails)
 qa_chain, qa_nlp, retriever, llm = load_data()
 
 filter_prompt = PromptTemplate.from_template("""
-Act as a professional tour planner. Based on the user's profile, plan the top 5 travel destinations in India or abroad. 
-Include: destination name, highlights, best season, estimated budget, activities, nearby attractions, accommodation options,
-and a match score (0–100) based on preferences.
-
-USER PROFILE:
-- Budget: {budget}
-- Interests: {interests}
-- Travel Duration: {duration}
-- Travel Style: {style}
-- Starting City: {city}
-
-DESTINATION DATA:
-{places}
+Act as a professional tour planner ...
+... {places}
 """)
-
 human_prompt = PromptTemplate.from_template("""
-Create a warm and clear travel recommendation. For each suggested destination, include:
-- Destination Name
-- Why it matches the user
-- Best Time to Visit
-- Estimated Budget
-- Top 3 Activities
-- Accommodation Tip
-- Match Score (0–100)
-
-Finish with an inspiring note encouraging safe and fun travel.
-
-DESTINATION DATA:
-{filtered_places}
+Create a warm and clear travel recommendation ...
+... {filtered_places}
 """)
 
 memory = ConversationBufferWindowMemory(k=5)
@@ -187,7 +173,7 @@ def root():
 def chat_with_bot(req: ChatRequest):
     try:
         answer = qa_chain.run(req.message)
-        # Optionally, speak_text(answer)  # if you want verbal output
+        # optionally speak_text(answer)
         return {"response": answer}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
