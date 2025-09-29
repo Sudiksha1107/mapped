@@ -4,7 +4,7 @@ from typing import List, Optional
 from fastapi.responses import FileResponse
 from langchain.chains import LLMChain, RetrievalQA
 from langchain_core.prompts import PromptTemplate
-from langchain_community.document_loaders import UnstructuredURLLoader
+from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import Chroma
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.memory import ConversationBufferWindowMemory
@@ -15,15 +15,21 @@ from langchain_groq import ChatGroq
 from dotenv import load_dotenv
 import os
 
-# Load API keys from .env file
+# Load API keys
 load_dotenv()
 
 # Initialize FastAPI app
-app = FastAPI(
-    title="🌍 YatraBot API",
-    description="AI-powered travel planning API",
-    version="1.0"
-)
+app = FastAPI(title="🌍 YatraBot API", description="AI-powered travel planning API", version="1.0")
+
+# ==== Text-to-Speech (Optional) ====
+import pyttsx3
+engine = pyttsx3.init()
+def speak_text(text: str):
+    try:
+        engine.say(text)
+        engine.runAndWait()
+    except Exception as e:
+        print(f"TTS Error: {e}")
 
 # ==== Data Models ====
 class UserProfile(BaseModel):
@@ -36,16 +42,10 @@ class UserProfile(BaseModel):
 class ChatRequest(BaseModel):
     message: str
 
-# ==== Load data (only once at startup) ====
+# ==== Load data once ====
 def load_data():
-    urls = [
-        "https://www.lonelyplanet.com/india",
-        "https://www.tripadvisor.in/Attractions-g293860-Activities-India.html",
-        "https://traveltriangle.com/blog/best-places-to-visit-in-india/",
-        "https://www.holidify.com/country/india/places-to-visit.html"
-    ]
-
-    loader = UnstructuredURLLoader(urls=urls)
+    # Load from local PDF
+    loader = PyPDFLoader("India Travel Guide.pdf")
     raw_docs = loader.load()
 
     splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=20)
@@ -73,10 +73,10 @@ def load_data():
 
     return qa_chain, qa_nlp, retriever, llm
 
-# Load everything at startup
+# Global LangChain objects
 qa_chain, qa_nlp, retriever, llm = load_data()
 
-# ==== Prompts ====
+# ==== Prompt Templates ====
 filter_prompt = PromptTemplate.from_template("""
 Act as a professional tour planner. Based on the user's profile, plan the top 5 travel destinations in India or abroad. 
 Include: destination name, highlights, best season, estimated budget, activities, nearby attractions, accommodation options,
@@ -114,7 +114,7 @@ memory = ConversationBufferWindowMemory(k=5)
 filter_chain = LLMChain(prompt=filter_prompt, llm=llm)
 response_chain = LLMChain(prompt=human_prompt, llm=llm)
 
-# ==== PDF Report Function ====
+# ==== PDF Generation ====
 def save_pdf_report(title: str, summary: str, filename="tour_plan.pdf"):
     pdf = FPDF()
     pdf.add_page()
@@ -123,7 +123,7 @@ def save_pdf_report(title: str, summary: str, filename="tour_plan.pdf"):
     pdf.output(filename)
     return filename
 
-# ==== Core Logic: Tour Planning ====
+# ==== Core Logic ====
 def generate_tour_plan(user_profile: dict) -> tuple[str, Optional[str]]:
     try:
         query = f"Best destinations for budget {user_profile['budget']} with interests {user_profile['interests']}"
