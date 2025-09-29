@@ -15,21 +15,15 @@ from langchain_groq import ChatGroq
 from dotenv import load_dotenv
 import os
 
-# Load API keys
+# Load API keys from .env file
 load_dotenv()
 
 # Initialize FastAPI app
-app = FastAPI(title="🌍 YatraBot API", description="AI-powered travel planning API", version="1.0")
-
-# ==== Text-to-Speech (Optional for backend only use) ====
-import pyttsx3
-engine = pyttsx3.init()
-def speak_text(text: str):
-    try:
-        engine.say(text)
-        engine.runAndWait()
-    except Exception as e:
-        print(f"TTS Error: {e}")
+app = FastAPI(
+    title="🌍 YatraBot API",
+    description="AI-powered travel planning API",
+    version="1.0"
+)
 
 # ==== Data Models ====
 class UserProfile(BaseModel):
@@ -42,7 +36,7 @@ class UserProfile(BaseModel):
 class ChatRequest(BaseModel):
     message: str
 
-# ==== Load data once ====
+# ==== Load data (only once at startup) ====
 def load_data():
     urls = [
         "https://www.lonelyplanet.com/india",
@@ -79,10 +73,10 @@ def load_data():
 
     return qa_chain, qa_nlp, retriever, llm
 
-# Global objects
+# Load everything at startup
 qa_chain, qa_nlp, retriever, llm = load_data()
 
-# Prompts
+# ==== Prompts ====
 filter_prompt = PromptTemplate.from_template("""
 Act as a professional tour planner. Based on the user's profile, plan the top 5 travel destinations in India or abroad. 
 Include: destination name, highlights, best season, estimated budget, activities, nearby attractions, accommodation options,
@@ -115,10 +109,12 @@ DESTINATION DATA:
 {filtered_places}
 """)
 
+# Chains
 memory = ConversationBufferWindowMemory(k=5)
 filter_chain = LLMChain(prompt=filter_prompt, llm=llm)
 response_chain = LLMChain(prompt=human_prompt, llm=llm)
 
+# ==== PDF Report Function ====
 def save_pdf_report(title: str, summary: str, filename="tour_plan.pdf"):
     pdf = FPDF()
     pdf.add_page()
@@ -127,7 +123,7 @@ def save_pdf_report(title: str, summary: str, filename="tour_plan.pdf"):
     pdf.output(filename)
     return filename
 
-# === Core Logic ===
+# ==== Core Logic: Tour Planning ====
 def generate_tour_plan(user_profile: dict) -> tuple[str, Optional[str]]:
     try:
         query = f"Best destinations for budget {user_profile['budget']} with interests {user_profile['interests']}"
@@ -159,7 +155,7 @@ def generate_tour_plan(user_profile: dict) -> tuple[str, Optional[str]]:
     except Exception as e:
         return f"⚠️ Error generating plan: {e}", None
 
-# ========== FastAPI Endpoints ==========
+# ==== FastAPI Endpoints ====
 
 @app.post("/generate-tour")
 def create_tour(user_profile: UserProfile):
