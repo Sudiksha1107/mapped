@@ -59,18 +59,26 @@ class ChatRequest(BaseModel):
 
 # ==== Load PDF + build vectorstore ====
 def load_data():
-    # Load PDF safely
     try:
         loader = PyPDFLoader("India Travel Guide.pdf")
         raw_docs = loader.load()
     except pypdf.errors.PdfStreamError as fe:
-        raise RuntimeError(f"Failed to load PDF: {fe}")
+        print("PDF load error:", fe)
+        raw_docs = []  # fallback
     except Exception as e:
         raise RuntimeError(f"Unexpected error loading PDF: {e}")
 
-    splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=20)
-    docs = splitter.split_documents(raw_docs)
+    if not raw_docs:
+        docs = []
+    else:
+        splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=20)
+        try:
+            docs = splitter.split_documents(raw_docs)
+        except Exception as e:
+            print("Error splitting docs:", e)
+            docs = raw_docs  # fallback
 
+    # Then continue with embedding, vectorstore etc, even if docs is empty
     embedding = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
     vectorstore = Chroma.from_documents(
@@ -197,3 +205,4 @@ def chat_with_bot(req: ChatRequest):
         return {"response": answer}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
