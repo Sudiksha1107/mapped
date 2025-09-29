@@ -25,6 +25,7 @@ app = FastAPI(title="🌍 YatraBot API", description="AI-powered travel planning
 try:
     import pyttsx3
     engine = pyttsx3.init()
+
     def speak_text(text: str):
         try:
             engine.say(text)
@@ -159,7 +160,6 @@ def generate_tour_plan(user_profile: dict) -> tuple[str, Optional[str]]:
         return f"⚠️ Error generating plan: {e}", None
 
 # ==== FastAPI Endpoints ====
-
 @app.post("/generate-tour")
 def create_tour(user_profile: UserProfile):
     response, pdf_file = generate_tour_plan(user_profile.dict())
