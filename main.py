@@ -15,8 +15,12 @@ from langchain_groq import ChatGroq
 from dotenv import load_dotenv
 import os
 import pypdf
+import logging
 
 load_dotenv()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="🌍 YatraBot API", version="1.0")
 
@@ -31,12 +35,12 @@ try:
             try:
                 engine.setProperty("voice", voices[0].id)
             except Exception as e:
-                print("Warning: failed to set default TTS voice:", e)
+                logger.warning(f"Failed to set default TTS voice: {e}")
     except Exception as e:
-        print("Warning: pyttsx3 init failed:", e)
+        logger.warning(f"pyttsx3 init failed: {e}")
         engine = None
 except ImportError:
-    print("pyttsx3 not installed. TTS unavailable.")
+    logger.info("pyttsx3 not installed. TTS unavailable.")
 
 def speak_text(text: str):
     if engine:
@@ -44,7 +48,7 @@ def speak_text(text: str):
             engine.say(text)
             engine.runAndWait()
         except Exception as e:
-            print("TTS Error during speak:", e)
+            logger.warning(f"TTS Error during speak: {e}")
 
 # ==== Models / Data classes ====
 class UserProfile(BaseModel):
@@ -59,26 +63,31 @@ class ChatRequest(BaseModel):
 
 # ==== Load PDF + build vectorstore ====
 def load_data():
+    raw_docs = []
     try:
         loader = PyPDFLoader("India Travel Guide.pdf")
         raw_docs = loader.load()
+        logger.info(f"Loaded {len(raw_docs)} raw docs from PDF")
     except pypdf.errors.PdfStreamError as fe:
-        print("PDF load error:", fe)
-        raw_docs = []  # fallback
+        logger.warning(f"PDF load error: {fe}")
     except Exception as e:
-        raise RuntimeError(f"Unexpected error loading PDF: {e}")
+        logger.error(f"Unexpected error loading PDF: {e}")
+        # If fatal, rethrow
+        raise
 
-    if not raw_docs:
-        docs = []
-    else:
+    docs = []
+    if raw_docs:
         splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=20)
         try:
             docs = splitter.split_documents(raw_docs)
         except Exception as e:
-            print("Error splitting docs:", e)
-            docs = raw_docs  # fallback
+            logger.warning(f"Error splitting docs: {e}")
+            docs = raw_docs  # fallback: use full docs
 
-    # Then continue with embedding, vectorstore etc, even if docs is empty
+    # If still docs empty, create a dummy document so vectorstore isn't completely empty
+    if not docs:
+        docs = [{"page_content": "No data available"}]
+
     embedding = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
     vectorstore = Chroma.from_documents(
@@ -147,7 +156,10 @@ def save_pdf_report(title: str, summary: str, filename="tour_plan.pdf"):
 
 def generate_tour_plan(user_profile: dict) -> tuple[str, Optional[str]]:
     try:
-        query = f"Best destinations for budget {user_profile['budget']} with interests {user_profile['interests']}"
+        query = (
+            f"Best destinations for budget {user_profile['budget']} "
+            f"with interests {user_profile['interests']}"
+        )
         retrieved_docs = retriever.get_relevant_documents(query)
         place_snippets = "\n".join([doc.page_content for doc in retrieved_docs])
 
@@ -174,6 +186,7 @@ def generate_tour_plan(user_profile: dict) -> tuple[str, Optional[str]]:
         pdf_file = save_pdf_report("Your Tour Plan", final_summary)
         return final_summary, pdf_file
     except Exception as e:
+        logger.error(f"Error in generate_tour_plan: {e}")
         return f"⚠️ Error generating plan: {e}", None
 
 @app.post("/generate-tour")
@@ -204,5 +217,5 @@ def chat_with_bot(req: ChatRequest):
         # optionally speak_text(answer)
         return {"response": answer}
     except Exception as e:
+        logger.error(f"Error in chat endpoint: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
