@@ -1,3 +1,2 @@
-docker build -t bot .
-docker run --rm -it --env-file .env bot
-streamlit run bot.py
+docker build -t main .
+docker run --rm -p 8000:8000 --env-file .env main
