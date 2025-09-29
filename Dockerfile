@@ -1,7 +1,6 @@
-# Stage 1: Build
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim
 
-WORKDIR /install
+WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential python3-dev git \
@@ -9,15 +8,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 RUN pip install --upgrade pip \
- && pip install --no-cache-dir -r requirements.txt \
- && pip freeze > requirements.lock
+ && pip install --no-cache-dir -r requirements.txt
 
-# Stage 2: Final image
-FROM python:3.12-slim
-
-WORKDIR /app
-
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY . .
 
 ENV PYTHONUNBUFFERED=1
