@@ -14,19 +14,18 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_groq import ChatGroq
 from dotenv import load_dotenv
 import os
-import pypdf  # for catching PDF errors
+import pypdf
 
 load_dotenv()
 
 app = FastAPI(title="🌍 YatraBot API", version="1.0")
 
-# ==== Text-to-Speech (Optional) with safe init ====
+# ==== Text‑to‑Speech (Optional) with safe init ====
 engine = None
 try:
     import pyttsx3
     try:
         engine = pyttsx3.init()
-        # Try to set a default voice if available
         voices = engine.getProperty("voices")
         if voices:
             try:
@@ -65,7 +64,6 @@ def load_data():
         loader = PyPDFLoader("India Travel Guide.pdf")
         raw_docs = loader.load()
     except pypdf.errors.PdfStreamError as fe:
-        # handle PDF read error
         raise RuntimeError(f"Failed to load PDF: {fe}")
     except Exception as e:
         raise RuntimeError(f"Unexpected error loading PDF: {e}")
@@ -97,12 +95,34 @@ def load_data():
 qa_chain, qa_nlp, retriever, llm = load_data()
 
 filter_prompt = PromptTemplate.from_template("""
-Act as a professional tour planner ...
-... {places}
+Act as a professional tour planner. Based on the user's profile, plan the top 5 travel destinations in India or abroad.
+Include: destination name, highlights, best season, estimated budget, activities, nearby attractions, accommodation options,
+and a match score (0–100) based on preferences.
+
+USER PROFILE:
+- Budget: {budget}
+- Interests: {interests}
+- Travel Duration: {duration}
+- Travel Style: {style}
+- Starting City: {city}
+
+DESTINATION DATA:
+{places}
 """)
 human_prompt = PromptTemplate.from_template("""
-Create a warm and clear travel recommendation ...
-... {filtered_places}
+Create a warm and clear travel recommendation. For each suggested destination, include:
+- Destination Name
+- Why it matches the user
+- Best Time to Visit
+- Estimated Budget
+- Top 3 Activities
+- Accommodation Tip
+- Match Score (0–100)
+
+Finish with an inspiring note encouraging safe and fun travel.
+
+DESTINATION DATA:
+{filtered_places}
 """)
 
 memory = ConversationBufferWindowMemory(k=5)
@@ -162,7 +182,7 @@ def create_tour(user_profile: UserProfile):
 def download_pdf(filename: str):
     file_path = os.path.join(".", filename)
     if os.path.exists(file_path):
-        return FileResponse(path=file_path, filename=filename, media_type='application/pdf')
+        return FileResponse(path=file_path, filename=filename, media_type="application/pdf")
     raise HTTPException(status_code=404, detail="File not found")
 
 @app.get("/")
