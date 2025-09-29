@@ -2,9 +2,11 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Only install minimal build tools (if needed)
+# Install minimal build tools and dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
+    libglib2.0-0 \
+    libgl1-mesa-glx \
  && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
@@ -15,8 +17,11 @@ RUN pip install --upgrade pip \
 # Copy application code
 COPY . .
 
+# Environment variables
 ENV PYTHONUNBUFFERED=1
+
+# Expose FastAPI default port
 EXPOSE 8000
 
-# Start the FastAPI app with 1 worker to reduce memory use
+# Start FastAPI with Uvicorn, single worker to save memory
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
