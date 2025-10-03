@@ -8,23 +8,28 @@ from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import Chroma
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.memory import ConversationBufferWindowMemory
+from langchain.schema import Document
 from fpdf import FPDF
 from transformers import pipeline
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_groq import ChatGroq
 from dotenv import load_dotenv
+from langchain.schema import Document
 import os
 import pypdf
 import logging
 
+# Load environment variables
 load_dotenv()
 
+# Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# FastAPI app
 app = FastAPI(title="🌍 YatraBot API", version="1.0")
 
-# ==== Text‑to‑Speech (Optional) with safe init ====
+# ==== Text-to-Speech (Optional) ====
 engine = None
 try:
     import pyttsx3
@@ -32,15 +37,11 @@ try:
         engine = pyttsx3.init()
         voices = engine.getProperty("voices")
         if voices:
-            try:
-                engine.setProperty("voice", voices[0].id)
-            except Exception as e:
-                logger.warning(f"Failed to set default TTS voice: {e}")
+            engine.setProperty("voice", voices[0].id)
     except Exception as e:
         logger.warning(f"pyttsx3 init failed: {e}")
-        engine = None
 except ImportError:
-    logger.info("pyttsx3 not installed. TTS unavailable.")
+    logger.info("pyttsx3 not installed. TTS disabled.")
 
 def speak_text(text: str):
     if engine:
@@ -48,9 +49,9 @@ def speak_text(text: str):
             engine.say(text)
             engine.runAndWait()
         except Exception as e:
-            logger.warning(f"TTS Error during speak: {e}")
+            logger.warning(f"TTS error: {e}")
 
-# ==== Models / Data classes ====
+# ==== Data Models ====
 class UserProfile(BaseModel):
     budget: str
     interests: List[str]
@@ -61,9 +62,12 @@ class UserProfile(BaseModel):
 class ChatRequest(BaseModel):
     message: str
 
-# ==== Load PDF + build vectorstore ====
+# ==== Load PDF + Build Vectorstore ====
 def load_data():
+      # Make sure it's imported
+
     raw_docs = []
+
     try:
         loader = PyPDFLoader("India Travel Guide.pdf")
         raw_docs = loader.load()
@@ -72,8 +76,7 @@ def load_data():
         logger.warning(f"PDF load error: {fe}")
     except Exception as e:
         logger.error(f"Unexpected error loading PDF: {e}")
-        # If fatal, rethrow
-        raise
+        raw_docs = []
 
     docs = []
     if raw_docs:
@@ -82,11 +85,10 @@ def load_data():
             docs = splitter.split_documents(raw_docs)
         except Exception as e:
             logger.warning(f"Error splitting docs: {e}")
-            docs = raw_docs  # fallback: use full docs
-
-    # If still docs empty, create a dummy document so vectorstore isn't completely empty
-    if not docs:
-        docs = [{"page_content": "No data available"}]
+            docs = raw_docs
+    else:
+        logger.warning("No documents loaded, adding fallback doc.")
+        docs = [Document(page_content="No data available", metadata={})]
 
     embedding = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
@@ -95,10 +97,11 @@ def load_data():
         embedding=embedding,
         persist_directory="./tour_chroma_db"
     )
+
     retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 5})
 
     llm = ChatGroq(
-        model="llama-3.3-70b-versatile",
+        model="llama-3-70b-8192",  # Update if needed
         temperature=0.2,
         groq_api_key=os.getenv("GROQ_API_KEY")
     )
@@ -108,9 +111,11 @@ def load_data():
 
     return qa_chain, qa_nlp, retriever, llm
 
-# Instantiate once (will error early if PDF or LLM setup fails)
+
+# ==== Load LLMs & Vectorstore ====
 qa_chain, qa_nlp, retriever, llm = load_data()
 
+# ==== Prompt Templates ====
 filter_prompt = PromptTemplate.from_template("""
 Act as a professional tour planner. Based on the user's profile, plan the top 5 travel destinations in India or abroad.
 Include: destination name, highlights, best season, estimated budget, activities, nearby attractions, accommodation options,
@@ -126,6 +131,7 @@ USER PROFILE:
 DESTINATION DATA:
 {places}
 """)
+
 human_prompt = PromptTemplate.from_template("""
 Create a warm and clear travel recommendation. For each suggested destination, include:
 - Destination Name
@@ -142,10 +148,12 @@ DESTINATION DATA:
 {filtered_places}
 """)
 
+# ==== Memory + Chains ====
 memory = ConversationBufferWindowMemory(k=5)
 filter_chain = LLMChain(prompt=filter_prompt, llm=llm)
 response_chain = LLMChain(prompt=human_prompt, llm=llm)
 
+# ==== Utility to Save PDF ====
 def save_pdf_report(title: str, summary: str, filename="tour_plan.pdf"):
     pdf = FPDF()
     pdf.add_page()
@@ -154,6 +162,7 @@ def save_pdf_report(title: str, summary: str, filename="tour_plan.pdf"):
     pdf.output(filename)
     return filename
 
+# ==== Main Tour Plan Generator ====
 def generate_tour_plan(user_profile: dict) -> tuple[str, Optional[str]]:
     try:
         query = (
@@ -185,9 +194,12 @@ def generate_tour_plan(user_profile: dict) -> tuple[str, Optional[str]]:
 
         pdf_file = save_pdf_report("Your Tour Plan", final_summary)
         return final_summary, pdf_file
+
     except Exception as e:
         logger.error(f"Error in generate_tour_plan: {e}")
         return f"⚠️ Error generating plan: {e}", None
+
+# ==== FastAPI Routes ====
 
 @app.post("/generate-tour")
 def create_tour(user_profile: UserProfile):
@@ -208,13 +220,13 @@ def download_pdf(filename: str):
 
 @app.get("/")
 def root():
-    return {"message": "YatraBot API is running"}
+    return {"message": "YatraBot API is running 🚀"}
 
 @app.post("/chat")
 def chat_with_bot(req: ChatRequest):
     try:
         answer = qa_chain.run(req.message)
-        # optionally speak_text(answer)
+        # Optionally: speak_text(answer)
         return {"response": answer}
     except Exception as e:
         logger.error(f"Error in chat endpoint: {e}")
