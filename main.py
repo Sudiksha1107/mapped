@@ -97,7 +97,7 @@ def load_data():
     retriever = vectorstore.as_retriever(search_type="similarity", search_kwargs={"k": 5})
 
     llm = ChatGroq(
-        model="llama-3-70b-8192",
+        model="llama-3.3-70b-versatile",
         temperature=0.2,
         groq_api_key=os.getenv("GROQ_API_KEY")
     )
@@ -113,19 +113,21 @@ qa_chain, qa_nlp, retriever, llm = load_data()
 # === Prompt Templates ===
 filter_prompt = PromptTemplate.from_template("""
 Act as a professional tour planner. Based on the user's profile, plan the top 5 travel destinations in India or abroad.
-Include: destination name, highlights, best season, estimated budget, activities, nearby attractions, accommodation options,
-and a match score (0–100) based on preferences.
+STRICTLY ENSURE that the duration of each tour plan matches the user's specified duration. Do not suggest plans that exceed or fall short of it.
 
-USER PROFILE:
-- Budget: {budget}
-- Interests: {interests}
-- Travel Duration: {duration}
-- Travel Style: {style}
-- Starting City: {city}
-
-DESTINATION DATA:
-{places}
+For each suggestion, include:
+- Destination Name
+- Highlights
+- Best Season
+- Estimated Budget
+- Activities
+- Nearby Attractions
+- Accommodation Options
+- Duration (must exactly match: {duration})
+- Match Score (0–100) based on user preferences
+Use bullet points for each destination.
 """)
+
 
 human_prompt = PromptTemplate.from_template("""
 Create a warm and clear travel recommendation. For each suggested destination, include:
@@ -144,24 +146,36 @@ DESTINATION DATA:
 """)
 
 # === Chains and Memory ===
-memory = ConversationBufferWindowMemory(k=5)
-filter_chain = LLMChain(prompt=filter_prompt, llm=llm)
-response_chain = LLMChain(prompt=human_prompt, llm=llm)
+from langchain_core.runnables import Runnable
+
+filter_chain: Runnable = filter_prompt | llm
+response_chain: Runnable = human_prompt | llm
 
 # === PDF Generator ===
 def save_pdf_report(title: str, summary: str, filename="tour_plan.pdf"):
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", size=12)
+
+    # ✅ Add Unicode font (DejaVu Sans supports ₹)
+    font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    if not os.path.exists(font_path):
+        # Agar Codespaces/Docker pe ho aur font missing hai to install karna padega:
+        # sudo apt-get update && sudo apt-get install -y fonts-dejavu
+        raise FileNotFoundError("DejaVuSans.ttf not found. Install fonts-dejavu.")
+
+    pdf.add_font("DejaVu", "", font_path, uni=True)
+    pdf.set_font("DejaVu", size=12)
+
     pdf.multi_cell(0, 10, f"{title}\n\n{summary}")
     pdf.output(filename)
     return filename
 
+
 # === Core Logic ===
-def generate_tour_plan(user_profile: dict) -> tuple[str, Optional[str]]:
+def generate_tour(user_profile: dict) -> tuple[str, Optional[str]]:
     try:
         query = f"Best destinations for budget {user_profile['budget']} with interests {user_profile['interests']}"
-        retrieved_docs = retriever.get_relevant_documents(query)
+        retrieved_docs = retriever.invoke(query)  # ✅ Updated for LangChain >= 0.1.46
         place_snippets = "\n".join([doc.page_content for doc in retrieved_docs])
 
         filter_input = {
@@ -173,29 +187,42 @@ def generate_tour_plan(user_profile: dict) -> tuple[str, Optional[str]]:
             "places": place_snippets
         }
 
-        filtered_places = filter_chain.run(filter_input)
+        # Run through filter chain (LLM) and get response
+        filtered_places = filter_chain.invoke(filter_input)
 
+        # ✅ Ensure output is plain string
+        if hasattr(filtered_places, "content"):
+            filtered_places_text = filtered_places.content
+        else:
+            filtered_places_text = str(filtered_places)
+
+        # ✅ Summarize using Hugging Face pipeline
         summarized = qa_nlp(
-            filtered_places,
+            filtered_places_text,
             max_length=800,
             min_length=300,
             do_sample=False
         )[0]['summary_text']
 
-        final_summary = response_chain.run({"filtered_places": summarized})
+        # Final human-friendly output
+        final_summary = response_chain.invoke({"filtered_places": summarized})
+        final_summary_text = final_summary.content if hasattr(final_summary, "content") else str(final_summary)
 
-        pdf_file = save_pdf_report("Your Tour Plan", final_summary)
-        return final_summary, pdf_file
+        # Save as PDF
+        pdf_file = save_pdf_report("Your Tour Plan", final_summary_text)
+
+        return final_summary_text, pdf_file
 
     except Exception as e:
         logger.error(f"Error in generate_tour_plan: {e}")
-        return f"⚠️ Error generating plan: {e}", None
+        raise  # Let FastAPI return 500
+
 
 # === FastAPI Routes ===
 
 @app.post("/generate-tour")
 def create_tour(user_profile: UserProfile):
-    response, pdf_file = generate_tour_plan(user_profile.dict())
+    response, pdf_file = generate_tour(user_profile.dict())
     if pdf_file:
         return {
             "summary": response,
@@ -203,16 +230,6 @@ def create_tour(user_profile: UserProfile):
         }
     raise HTTPException(status_code=500, detail=response)
 
-@app.get("/download/{filename}")
-def download_pdf(filename: str):
-    file_path = os.path.join(".", filename)
-    if os.path.exists(file_path):
-        return FileResponse(path=file_path, filename=filename, media_type="application/pdf")
-    raise HTTPException(status_code=404, detail="File not found")
-
-@app.get("/")
-def root():
-    return {"message": "YatraBot API is running 🚀"}
 
 @app.post("/chat")
 def chat_with_bot(req: ChatRequest):
