@@ -6,11 +6,13 @@ langchain-core>=0.3.0
 langchain-groq>=0.3.0
 langchain-huggingface>=0.3.0
 transformers>=4.30.0
-fpdf>=1.7.0
+fpdf2
 python-dotenv>=1.1.0
 pypdf>=3.10.0
 pyttsx3>=2.90
 torch
 sentence-transformers
 chromadb
+anyio>=4.0.0
+
 
