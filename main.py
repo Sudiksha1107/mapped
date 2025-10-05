@@ -41,7 +41,7 @@ class ChatRequest(BaseModel):
 # === Load PDF and Vectorstore ===
 def load_data():
     raw_docs = []
-    pdf_path = os.path.join(os.getcwd(), "India Travel Guide.pdf")
+    pdf_path = os.path.join(os.getcwd(), "India Travel Guide_compressed (1)_compressed_compressed-1-1000.pdf")
 
     try:
         if not os.path.exists(pdf_path):
@@ -213,3 +213,4 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=False)
 ```
+
